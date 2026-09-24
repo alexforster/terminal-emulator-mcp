@@ -3,10 +3,16 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pty, { type IPty } from "node-pty";
 import {
-  SnapshotSchema, StartSchema, ToolError, type ErrorCode, type ObservationOptions,
+  InputSchema, ResizeSchema, SnapshotSchema, StartSchema, ToolError,
+  type BatchProgress, type ErrorCode, type InputAction, type ObservationOptions,
   type SessionInfo, type StartOptions, type TerminalSnapshot,
 } from "./contracts.js";
+import { encodeInput } from "./input.js";
 import { TerminalModel } from "./terminal.js";
+
+export interface BatchResult extends BatchProgress {
+  snapshot: TerminalSnapshot;
+}
 
 export class Session {
   private readonly sessionId = randomUUID();
@@ -17,6 +23,7 @@ export class Session {
   private closePromise?: Promise<void>;
   private disposed = false;
   private ioFailure?: string;
+  private mutations: Promise<void> = Promise.resolve();
 
   private constructor(
     private readonly options: StartOptions,
@@ -131,12 +138,129 @@ export class Session {
     }
   }
 
+  async input(
+    actions: InputAction[], options: ObservationOptions = {}, signal?: AbortSignal,
+  ): Promise<BatchResult> {
+    const progress: BatchProgress = { actionsCompleted: 0, inputSent: false };
+    try {
+      const validated = InputSchema.safeParse({ ...options, sessionId: this.sessionId, actions });
+      if (!validated.success) throw this.error("INVALID_INPUT", validated.error.message);
+      const { settleMs, settleTimeoutMs } = validated.data;
+      return await this.enqueue(async (cancellation) => {
+        for (const [index, action] of validated.data.actions.entries()) {
+          progress.failedActionIndex = index;
+          this.assertRunning(cancellation);
+          if (action.type === "wait") {
+            if ("durationMs" in action) {
+              await delay(action.durationMs, undefined, { signal: cancellation });
+            } else {
+              const { settleMs, settleTimeoutMs } = action;
+              await this.snapshot({ settleMs, settleTimeoutMs }, 0, cancellation);
+            }
+          } else {
+            await this.model.drain(cancellation);
+            this.assertRunning(cancellation);
+            const bytes = encodeInput(action, this.model.getInputModes());
+            if (bytes.length > 0) {
+              this.child.write(bytes);
+              progress.inputSent = true;
+            }
+          }
+          progress.actionsCompleted++;
+          delete progress.failedActionIndex;
+        }
+        const snapshot = await this.snapshot({ settleMs, settleTimeoutMs }, 0, cancellation);
+        return { ...progress, snapshot };
+      }, signal);
+    } catch (error) {
+      const failure = error instanceof ToolError ? error : this.error("IO_ERROR", String(error));
+      const effect = failure.code === "SCREEN_NOT_SETTLED" && progress.inputSent
+        ? " Input was already submitted and has not been undone." : "";
+      throw new ToolError(failure.code, failure.message + effect, {
+        ...this.error(failure.code, failure.message).details, ...failure.details, ...progress,
+      });
+    }
+  }
+
+  async resize(
+    cols: number, rows: number, options: ObservationOptions = {}, signal?: AbortSignal,
+  ): Promise<TerminalSnapshot> {
+    const validated = ResizeSchema.safeParse({ ...options, sessionId: this.sessionId, cols, rows });
+    if (!validated.success) throw this.error("INVALID_INPUT", validated.error.message);
+    const { settleMs, settleTimeoutMs } = validated.data;
+    return this.enqueue(async (cancellation) => {
+      await this.model.drain(cancellation);
+      this.assertRunning(cancellation);
+      try {
+        this.child.resize(cols, rows);
+      } catch (error) {
+        this.assertRunning(cancellation);
+        throw this.error("IO_ERROR", `Could not resize the terminal: ${String(error)}`);
+      }
+      this.model.resize(cols, rows);
+      try {
+        return await this.snapshot({ settleMs, settleTimeoutMs }, 0, cancellation);
+      } catch (error) {
+        if (error instanceof ToolError && error.code === "SCREEN_NOT_SETTLED") {
+          throw new ToolError(error.code, `Terminal dimensions are ${cols}x${rows}. ${error.message}`, error.details);
+        }
+        throw error;
+      }
+    }, signal);
+  }
+
   close(): Promise<void> {
     if (!this.closePromise) {
       this.lifetime.abort(new ToolError("SESSION_CLOSED", "The terminal session is closed."));
       this.closePromise = this.cleanup();
     }
     return this.closePromise;
+  }
+
+  private enqueue<T>(operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const cancellation = AbortSignal.any(signal ? [signal, this.lifetime.signal] : [this.lifetime.signal]);
+    return new Promise((resolve, reject) => {
+      let started = false;
+      const onAbort = () => {
+        if (!started) reject(this.cancellationError(cancellation));
+      };
+      if (cancellation.aborted) {
+        onAbort();
+        return;
+      }
+      cancellation.addEventListener("abort", onAbort, { once: true });
+      const job = this.mutations.then(async () => {
+        started = true;
+        this.assertRunning(cancellation);
+        return operation(cancellation);
+      });
+      this.mutations = job.then(() => {}, () => {});
+      void job.then(
+        (value) => {
+          cancellation.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          cancellation.removeEventListener("abort", onAbort);
+          if (cancellation.aborted) reject(this.cancellationError(cancellation));
+          else if (error instanceof ToolError) reject(error);
+          else reject(this.error("IO_ERROR", `Terminal operation failed: ${String(error)}`));
+        },
+      );
+    });
+  }
+
+  private cancellationError(signal: AbortSignal): ToolError {
+    return signal.reason === this.lifetime.signal.reason
+      ? this.error("SESSION_CLOSED", "The terminal session is closed.")
+      : this.error("REQUEST_CANCELLED", "The request was cancelled.");
+  }
+
+  private assertRunning(signal: AbortSignal): void {
+    if (signal.aborted) throw this.cancellationError(signal);
+    if (this.lifetime.signal.aborted) throw this.error("SESSION_CLOSED", "The terminal session is closed.");
+    if (this.exit) throw this.error("SESSION_EXITED", "The terminal process has exited.");
+    if (this.ioFailure) throw this.error("IO_ERROR", this.ioFailure);
   }
 
   private async cleanup(): Promise<void> {
@@ -205,5 +329,43 @@ export class Session {
       sessionId: this.sessionId, status: this.exit ? "exited" : "running", ...this.exit,
     };
     return new ToolError(code, message, { sessionId: this.sessionId, latestSnapshot });
+  }
+}
+
+export class SessionRegistry {
+  private readonly sessions = new Map<string, Session>();
+
+  start(options: StartOptions): Session {
+    if (this.sessions.size >= 8) throw new ToolError("SESSION_LIMIT", "At most eight sessions may be retained.");
+    const session = Session.start(options);
+    this.sessions.set(session.info().sessionId, session);
+    return session;
+  }
+
+  get(sessionId: string): Session {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new ToolError("SESSION_NOT_FOUND", "The terminal session was not found.", { sessionId });
+    return session;
+  }
+
+  list(): SessionInfo[] {
+    return Array.from(this.sessions.values(), (session) => session.info());
+  }
+
+  async close(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    try {
+      await session.close();
+      return true;
+    } finally {
+      this.sessions.delete(sessionId);
+    }
+  }
+
+  async closeAll(): Promise<void> {
+    const results = await Promise.allSettled(Array.from(this.sessions.keys(), (sessionId) => this.close(sessionId)));
+    const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    if (failures.length > 0) throw new AggregateError(failures, "Could not close all terminal sessions.");
   }
 }

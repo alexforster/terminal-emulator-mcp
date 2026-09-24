@@ -10,7 +10,7 @@ if (mode === "ignore-hup" || mode === "descendant") {
 }
 if (mode === "descendant") setInterval(() => {}, 1000);
 
-process.on("SIGWINCH", () => {
+process.stdout.on("resize", () => {
   process.stdout.write(`SIZE ${process.stdout.columns}x${process.stdout.rows}\r\n`);
 });
 
@@ -53,6 +53,22 @@ switch (mode) {
   case "synchronized":
     process.stdout.write("\x1b[?2026hUNFINISHED\r\n");
     break;
+  case "animate":
+    process.stdin.once("data", () => {
+      let frame = 0;
+      setInterval(() => process.stdout.write(`\x1b[HFRAME ${++frame}`), 25);
+    });
+    break;
+  case "record":
+  case "modes": {
+    let received = Buffer.alloc(0);
+    process.stdin.on("data", (bytes: Buffer) => {
+      received = Buffer.concat([received, bytes]);
+      if (mode === "modes") process.stdout.write("\x1b[?1h\x1b[?2004h\x1b[?1004h");
+      process.stdout.write(`BYTES ${received.toString("hex")}\r\n`);
+    });
+    break;
+  }
   default:
     process.stdin.on("data", (bytes: Buffer) => {
       if (bytes.includes(3)) {
