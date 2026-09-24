@@ -1,6 +1,8 @@
 import xterm from "@xterm/headless";
 import type { IDisposable } from "@xterm/headless";
-import { ToolError, type InputModes, type MouseEncoding, type ScreenState } from "./contracts.js";
+import {
+  ToolError, type InputModes, type MouseEncoding, type ObservationOptions, type ObservedScreen, type ScreenState,
+} from "./contracts.js";
 import { captureScreen, visibleFingerprint } from "./snapshot.js";
 
 interface DrainWaiter {
@@ -21,6 +23,7 @@ export class TerminalModel {
   private readonly drainWaiters = new Set<DrainWaiter>();
   private readonly responseListeners = new Set<(data: string) => void>();
   private readonly pendingBytesListeners = new Set<(bytes: number) => void>();
+  private readonly observers = new Set<() => void>();
   private readonly listeners: IDisposable[];
 
   constructor(cols: number, rows: number) {
@@ -28,6 +31,12 @@ export class TerminalModel {
     this.fingerprint = visibleFingerprint(this.capture());
     const parser = this.terminal.parser;
     this.listeners = [
+      this.terminal.onWriteParsed(() => {
+        if (this.disposed) return;
+        // Compare visible frames once per parser slice; per-write callbacks still own drain accounting.
+        this.fingerprint = visibleFingerprint(this.capture());
+        this.notifyObservers();
+      }),
       this.terminal.onData((data) => {
         for (const listener of this.responseListeners) listener(data);
       }),
@@ -54,7 +63,6 @@ export class TerminalModel {
       if (this.disposed) return;
       this.parsed = sequence;
       this.pendingBytes -= bytes;
-      this.fingerprint = visibleFingerprint(this.capture());
       this.notifyPendingBytes();
       for (const waiter of this.drainWaiters) {
         if (waiter.sequence <= this.parsed) {
@@ -89,6 +97,64 @@ export class TerminalModel {
     return captureScreen(this.terminal, this.cursorVisible, this.mouseEncoding, scrollbackLines);
   }
 
+  observe(options: ObservationOptions = {}, scrollbackLines = 0, signal?: AbortSignal): Promise<ObservedScreen> {
+    const quietMs = options.settleMs ?? 250;
+    const startedAt = performance.now();
+    const deadline = startedAt + (options.settleTimeoutMs ?? 1000);
+    const boundary = this.received;
+    const immediate = quietMs === 0 && options.settleTimeoutMs === undefined;
+    let quietSince = startedAt;
+    let fingerprint = this.fingerprint;
+    let parsed = this.parsed;
+    let parsedAt = startedAt;
+    return new Promise((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let finished = false;
+      const finish = (error?: Error, settled = false) => {
+        finished = true;
+        clearTimeout(timer);
+        this.observers.delete(evaluate);
+        signal?.removeEventListener("abort", evaluate);
+        if (error) reject(error);
+        else resolve({ ...this.capture(scrollbackLines), settled });
+      };
+      const evaluate = () => {
+        if (finished) return;
+        if (this.disposed) {
+          finish(new ToolError("SESSION_CLOSED", "The terminal is closed."));
+          return;
+        }
+        if (signal?.aborted) {
+          finish(new ToolError("REQUEST_CANCELLED", "The request was cancelled."));
+          return;
+        }
+        const now = performance.now();
+        if (parsed !== this.parsed) {
+          parsed = this.parsed;
+          parsedAt = now;
+        }
+        if (fingerprint !== this.fingerprint) {
+          fingerprint = this.fingerprint;
+          quietSince = now;
+        }
+        const quietAt = quietSince + quietMs;
+        const synchronized = this.terminal.modes.synchronizedOutputMode;
+        const drained = this.parsed >= this.received;
+        const settled = drained && !synchronized && Math.max(quietAt, parsedAt) <= Math.min(now, deadline);
+        if (settled || now >= deadline || (immediate && (synchronized || this.parsed >= boundary))) {
+          finish(undefined, settled);
+          return;
+        }
+        clearTimeout(timer);
+        const next = quietAt > now ? Math.min(quietAt, deadline) : deadline;
+        timer = setTimeout(evaluate, next - now);
+      };
+      this.observers.add(evaluate);
+      signal?.addEventListener("abort", evaluate, { once: true });
+      evaluate();
+    });
+  }
+
   getInputModes(): InputModes {
     this.assertOpen();
     const modes = this.terminal.modes;
@@ -107,6 +173,7 @@ export class TerminalModel {
     this.assertOpen();
     this.terminal.resize(cols, rows);
     this.fingerprint = visibleFingerprint(this.capture());
+    this.notifyObservers();
   }
 
   onResponse(listener: (data: string) => void): () => void {
@@ -124,6 +191,7 @@ export class TerminalModel {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.notifyObservers();
     for (const waiter of this.drainWaiters) {
       waiter.reject(new ToolError("SESSION_CLOSED", "The terminal is closed."));
     }
@@ -145,6 +213,10 @@ export class TerminalModel {
 
   private notifyPendingBytes(): void {
     for (const listener of this.pendingBytesListeners) listener(this.pendingBytes);
+  }
+
+  private notifyObservers(): void {
+    for (const observer of this.observers) observer();
   }
 
   private assertOpen(): void {
