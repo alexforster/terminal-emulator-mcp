@@ -47,7 +47,7 @@ Exited sessions remain inspectable, with the last parsed screen, exit code, and 
 
 Closing a session aborts its pending observers and queued actions, terminates its process group, waits a bounded grace period, and escalates to `SIGKILL` if necessary. The implementation must account for `node-pty.kill()` signaling only its direct child. Group cleanup covers ordinary descendants sharing the launched process group; deliberately detached processes are outside session ownership. Cleanup releases the emulator, listeners, timers, and registry entry. Closing an already-closed or unknown ID returns `closed: false`.
 
-Graceful shutdown follows the same close path on transport disconnect, `SIGINT`, or `SIGTERM`. Abrupt termination such as `SIGKILL` cannot execute cleanup.
+Graceful shutdown follows the same close path on transport disconnect, `SIGHUP`, `SIGINT`, or `SIGTERM`. Abrupt termination such as `SIGKILL` cannot execute cleanup.
 
 ## MCP tools
 
@@ -62,7 +62,9 @@ Graceful shutdown follows the same close path on transport disconnect, `SIGINT`,
 
 An observation option applies to the snapshot returned by the operation. For input, its deadline begins after the batch has completed. A `wait` action inside a batch has its own independent timing.
 
-Tool results contain structured data and a readable text representation. Snapshot text includes session status, numbered screen rows, a style legend, spans, cursor position, settling status, and requested history. MCP `tools/list` publishes the complete validated input vocabulary. Tool descriptions explain mode-dependent behavior, text versus paste, timeout effects, and examples.
+Tool results contain structured data and a readable text representation. Snapshot text includes session status, numbered screen rows, a style legend, spans, cursor position, settling status, and requested history. Readable spans are grouped by row as `row: column[-column]=styleId`; structured spans retain their complete objects. MCP `tools/list` publishes the complete validated input vocabulary, including strict object boundaries with `additionalProperties:false`. Unknown top-level arguments and refinements are validated by the shared full schemas before mutation. Tool descriptions explain mode-dependent behavior, text versus paste, timeout effects, and examples.
+
+The encoded JSON tool result, including both structured data and readable content, has an 8 MiB budget, leaving room for the protocol envelope within the SDK's default 10 MiB transport limit. A result that exceeds the budget returns `RESULT_TOO_LARGE` instead of a screen; no styles or history are silently truncated. The bounded error preserves the allocated session ID, dimensions, process status, exit metadata, and any input progress. It reports `resultBytes` and `limitBytes`; oversized underlying errors retain their code and bounded message in `originalError`, with `messageTruncated:true` if the message exceeds 1,024 characters. Session-list size errors retain concise session summaries. A caller-supplied diagnostic identity longer than 1,024 characters is explicitly marked `sessionIdTruncated`; allocated UUIDs remain intact. Input, resize, and start effects are not rolled back. The connection and session remain available for recovery through resize or a snapshot requesting fewer history lines.
 
 ## Snapshot contract
 
@@ -183,7 +185,7 @@ Successful input results include `actionsCompleted` and `inputSent` alongside th
 
 Operational failures use MCP tool errors (`isError: true`) with a stable `code`, readable `message`, `sessionId` when allocated, and the latest snapshot when available. An input failure also includes `actionsCompleted`, `inputSent`, and `failedActionIndex` when failure occurred in an action; the index is zero-based and is not a terminal coordinate.
 
-Error codes include `SESSION_NOT_FOUND`, `SESSION_EXITED`, `SESSION_CLOSED`, `SESSION_LIMIT`, `SPAWN_FAILED`, `INVALID_INPUT`, `UNSUPPORTED_INPUT`, `SCREEN_NOT_SETTLED`, `REQUEST_CANCELLED`, and `IO_ERROR`. Invalid schema arguments can be rejected by MCP validation before reaching the handler.
+Error codes include `SESSION_NOT_FOUND`, `SESSION_EXITED`, `SESSION_CLOSED`, `SESSION_LIMIT`, `SPAWN_FAILED`, `INVALID_INPUT`, `UNSUPPORTED_INPUT`, `SCREEN_NOT_SETTLED`, `REQUEST_CANCELLED`, `IO_ERROR`, and `RESULT_TOO_LARGE`. Invalid schema arguments can be rejected by MCP validation before reaching the handler. Missing-session input errors carry `actionsCompleted:0` and `inputSent:false`.
 
 A strict timeout after input or resize does not undo that operation. Error text explicitly states the applied effect. A timeout after start contains the allocated session ID so the process remains discoverable. Unknown actions and unsupported static key combinations are rejected before the batch begins; state-dependent failures, such as mouse reporting being disabled at execution time, can occur after earlier actions and report that progress.
 

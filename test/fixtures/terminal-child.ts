@@ -20,6 +20,7 @@ if (mode === "group") {
   process.stdout.write(`DESCENDANT ${child.pid}\r\n`);
 }
 
+if (mode === "dense" || mode === "unique") process.stdout.write("\x1b[?2026h");
 process.stdout.write(`READY ${process.stdout.columns}x${process.stdout.rows} PID ${process.pid}\r\n`);
 
 switch (mode) {
@@ -69,6 +70,19 @@ switch (mode) {
     });
     break;
   }
+  case "dense":
+  case "unique":
+    process.stdin.on("data", (bytes: Buffer) => {
+      if (!bytes.toString().includes("draw")) return;
+      const count = mode === "dense" ? 100_000 : 50_000;
+      const cells = Array.from({ length: count }, (_, index) => {
+        const color = mode === "dense" ? `3${index % 2 + 1}` :
+          `38;2;${index >> 16};${index >> 8 & 255};${index & 255}`;
+        return `\x1b[${color}m${index === count - 1 ? "Z" : "x"}`;
+      });
+      process.stdout.write(`\x1b[0m\x1b[2J\x1b[H\x1b[?2026h${cells.join("")}\x1b[?2026l`);
+    });
+    break;
   default:
     process.stdin.on("data", (bytes: Buffer) => {
       if (bytes.includes(3)) {

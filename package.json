@@ -42,19 +42,24 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && chmod +x dist/src/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/test/*.test.js",
+    "test": "npm run build && node --test dist/test/*.test.js scripts/*.test.mjs",
+    "test:package": "node scripts/test-package.mjs",
     "prepack": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.1",
     "@xterm/headless": "6.0.0",
     "node-pty": "1.2.0-beta.15",
-    "zod": "4.6.5"
+    "zod": "4.6.4"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
+    "semver": "7.8.5",
     "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "node-pty@1.2.0-beta.15": true
   }
 }

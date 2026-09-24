@@ -1,0 +1,61 @@
+name: Dependency release
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-release
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: >-
+      vars.RELEASE_APP_ID != '' &&
+      (github.event_name != 'workflow_dispatch' ||
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) &&
+      (github.event_name != 'pull_request_target' ||
+       github.event.pull_request.base.ref == github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Privileged reconciliation always executes source from the default branch.
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm install --global npm@11.19.1
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - uses: actions/create-github-app-token@v3.2.0
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+          permission-checks: read
+          permission-statuses: read
+      - uses: actions/github-script@v9.0.0
+        env:
+          RELEASE_APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const { pathToFileURL } = require("node:url");
+            const source = pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/release-automation.mjs`);
+            const { reconcile } = await import(source.href);
+            await reconcile({ github, context, core, appSlug: process.env.RELEASE_APP_SLUG });
