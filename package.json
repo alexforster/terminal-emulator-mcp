@@ -1,0 +1,60 @@
+{
+  "name": "terminal-emulator-mcp",
+  "version": "0.9.0",
+  "description": "Headless interactive terminal MCP server with styled screen snapshots and keyboard/mouse control.",
+  "license": "Apache-2.0",
+  "author": "Alex Forster <alex@alexforster.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexforster/terminal-emulator-mcp.git"
+  },
+  "homepage": "https://github.com/alexforster/terminal-emulator-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/alexforster/terminal-emulator-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "terminal",
+    "terminal-emulator",
+    "headless",
+    "shell",
+    "pty",
+    "tui"
+  ],
+  "type": "module",
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "terminal-emulator-mcp": "dist/src/index.js"
+  },
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.1",
+    "@xterm/headless": "6.0.0",
+    "node-pty": "1.2.0-beta.15",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
+  }
+}
