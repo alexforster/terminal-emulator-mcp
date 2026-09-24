@@ -76,7 +76,7 @@ export interface SessionInfo {
 export type ErrorCode =
   | "SESSION_NOT_FOUND" | "SESSION_EXITED" | "SESSION_CLOSED" | "SESSION_LIMIT"
   | "SPAWN_FAILED" | "INVALID_INPUT" | "UNSUPPORTED_INPUT" | "SCREEN_NOT_SETTLED"
-  | "REQUEST_CANCELLED" | "IO_ERROR";
+  | "REQUEST_CANCELLED" | "IO_ERROR" | "RESULT_TOO_LARGE";
 
 export interface ErrorDetails extends Partial<BatchProgress> {
   sessionId?: string;

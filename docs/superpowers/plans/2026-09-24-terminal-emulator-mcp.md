@@ -25,7 +25,7 @@
 - Source line-length target: 120 characters; Markdown prose is not hard-wrapped.
 - Tests use Node's built-in test runner; additional test frameworks and application frameworks are unnecessary.
 
-Additional exact limits from the spec: eight open sessions, 2–500 columns, 1–200 rows, 2,000 scrollback lines, 256 actions per batch, 1 MiB of encoded text/raw input per batch, and 100 wheel steps per action. Pause PTY reads at 1 MiB of pending output and resume at 256 KiB. Timing options accept integer milliseconds; quiet intervals and explicit delays are at most 60,000 ms, and strict deadlines are between 1 and 60,000 ms.
+Additional exact limits from the spec: eight open sessions, 2–500 columns, 1–200 rows, 2,000 scrollback lines, 256 actions per batch, 1 MiB of encoded text/raw input per batch, 8 MiB per encoded tool result, and 100 wheel steps per action. Pause PTY reads at 1 MiB of pending output and resume at 256 KiB. Timing options accept integer milliseconds; quiet intervals and explicit delays are at most 60,000 ms, and strict deadlines are between 1 and 60,000 ms.
 
 ## Files and responsibilities
 
@@ -122,7 +122,7 @@ export interface SessionInfo {
 export type ErrorCode =
   | "SESSION_NOT_FOUND" | "SESSION_EXITED" | "SESSION_CLOSED" | "SESSION_LIMIT"
   | "SPAWN_FAILED" | "INVALID_INPUT" | "UNSUPPORTED_INPUT" | "SCREEN_NOT_SETTLED"
-  | "REQUEST_CANCELLED" | "IO_ERROR";
+  | "REQUEST_CANCELLED" | "IO_ERROR" | "RESULT_TOO_LARGE";
 export interface ErrorDetails extends Partial<BatchProgress> {
   sessionId?: string;
   latestSnapshot?: TerminalSnapshot;
@@ -192,7 +192,7 @@ These declarations describe interfaces to implement, not a separate declaration-
 
 **Produces:** `TerminalModel` constructor, `write`, `drain`, `capture`, `getInputModes`, `resize`, `onResponse`, `onPendingBytes`, and `dispose`; `ScreenState`, `InputModes`, result types, and `ToolError`. Observation timing is implemented in Task 3.
 
-- [ ] **Create the configuration needed to execute the first behavior test.** Install the exact runtime versions and development tools. Keep source and tests under one TypeScript compilation root, with output in `dist/`; package only `dist/src`.
+- [x] **Create the configuration needed to execute the first behavior test.** Install the exact runtime versions and development tools. Keep source and tests under one TypeScript compilation root, with output in `dist/`; package only `dist/src`.
 
 ```sh
 npm install --save-exact @xterm/headless@6.0.0 @modelcontextprotocol/sdk@1.30.1 node-pty@1.2.0-beta.15 zod@4
@@ -220,7 +220,7 @@ Use these package fields, adding dependencies from the commands rather than copy
 
 Set `target: "ES2022"`, `module: "NodeNext"`, `moduleResolution: "NodeNext"`, `strict: true`, `rootDir: "."`, `outDir: "dist"`, `types: ["node"]`, and `skipLibCheck: true`. Include `src/**/*.ts` and `test/**/*.ts`. Ignore `node_modules/`, `dist/`, and `*.tgz`. Use Apache-2.0, Alex Forster <alex@alexforster.com>, and `git+https://github.com/alexforster/terminal-emulator-mcp.git`; include matching homepage/issues links, macOS/Linux declarations, public publishing metadata, and terminal/MCP discovery keywords. Add the full standard Apache-2.0 LICENSE.
 
-- [ ] **Write and run a failing screen test.** Use this initial case plus explicit assertions for wide text, concealed cells, normal/alternate buffers, a pending-wrap cursor, and history capped at 2,000 lines.
+- [x] **Write and run a failing screen test.** Use this initial case plus explicit assertions for wide text, concealed cells, normal/alternate buffers, a pending-wrap cursor, and history capped at 2,000 lines.
 
 ```ts
 import assert from "node:assert/strict";
@@ -246,7 +246,7 @@ test("captures highlighted blank cells with 1-based coordinates", async (t) => {
 
 Run `npm run build && node --test dist/test/terminal.test.js`. Expected initial failure: the model implementation is absent, or highlighted blanks fail the assertion.
 
-- [ ] **Implement the model and formatter.** Construct xterm with `{ cols, rows, scrollback: 2000, allowProposedApi: true }`. Maintain received/parsed sequence counters and pending UTF-8 byte counts. A drain captures the received sequence at entry and resolves when that sequence is parsed; subsequent output does not extend its boundary.
+- [x] **Implement the model and formatter.** Construct xterm with `{ cols, rows, scrollback: 2000, allowProposedApi: true }`. Maintain received/parsed sequence counters and pending UTF-8 byte counts. A drain captures the received sequence at entry and resolves when that sequence is parsed; subsequent output does not extend its boundary.
 
 ```ts
 const sequence = ++received;
@@ -264,11 +264,11 @@ Read `buffer.active.baseY + rowOffset`; iterate actual cells, including empty st
 
 Register public mode observers for `CSI ? ... h/l`, full reset `ESC c`, and soft reset `CSI ! p`; return `false` from each callback. Track cursor mode 25 and mouse encoding modes 1006/1016 using the reset behavior in the spec. Forward xterm's `onData` event through `onResponse`. Remove all listeners and reject pending drain waiters on disposal.
 
-- [ ] **Verify parser and mode behavior with concrete cases.** Check split writes `"\x1b["` then `"7mX"`; query response to `"\x1b[6n"`; `"\x1b[?1049h"` / `"\x1b[?1049l"`; `"\x1b[?25l\x1bc"` keeping the cursor hidden; `"\x1b[!p"` revealing it; and compound `"\x1b[?1006;1016h"` selecting pixel encoding. Verify capture remains synchronous while a drain resolves only after parsing.
+- [x] **Verify parser and mode behavior with concrete cases.** Check split writes `"\x1b["` then `"7mX"`; query response to `"\x1b[6n"`; `"\x1b[?1049h"` / `"\x1b[?1049l"`; `"\x1b[?25l\x1bc"` keeping the cursor hidden; `"\x1b[!p"` revealing it; and compound `"\x1b[?1006;1016h"` selecting pixel encoding. Verify capture remains synchronous while a drain resolves only after parsing.
 
 Run `npm test`. Expected: screen, parser, mode, and cleanup tests pass with no open timer handles.
 
-- [ ] **Commit the independently usable model.**
+- [x] **Commit the independently usable model.**
 
 ```sh
 git add package.json package-lock.json tsconfig.json .gitignore \
@@ -284,7 +284,7 @@ git commit -m "feat: model terminal screens with headless xterm"
 
 **Produces:** `encodeKey`, `encodeInput`, `InputActionSchema`, inferred `InputAction`, `ObservationSchema`, `StartSchema`, `SnapshotSchema`, `InputSchema`, `ResizeSchema`, and `SessionIdSchema`; infer `StartOptions` from `StartSchema`.
 
-- [ ] **Write failing table-driven encoder tests.** Cover each function-key/navigation family, every allowed modifier subset for those families, and explicit rejection cases for the simple-key whitelist.
+- [x] **Write failing table-driven encoder tests.** Cover each function-key/navigation family, every allowed modifier subset for those families, and explicit rejection cases for the simple-key whitelist.
 
 ```ts
 import assert from "node:assert/strict";
@@ -305,11 +305,11 @@ test("encodes conventional and application cursor keys", () => {
 
 Run `npm run build && node --test dist/test/input.test.js`. Expected initial failure: missing encoder.
 
-- [ ] **Implement the key encoder using lookup tables.** Export the literal named-key list and modifier enum from `keys.ts`. Use the spec's exact sequences and simple-key whitelist; compute `m` from modifier membership. Prefix Alt characters with ESC on both platforms. Throw `RangeError` for duplicate modifiers and unsupported combinations; schema refinements convert that error to a validation issue, which handlers report as `INVALID_INPUT`. Keep `keys.ts` independent of `contracts.ts` so schemas can reuse its validation without an import cycle.
+- [x] **Implement the key encoder using lookup tables.** Export the literal named-key list and modifier enum from `keys.ts`. Use the spec's exact sequences and simple-key whitelist; compute `m` from modifier membership. Prefix Alt characters with ESC on both platforms. Throw `RangeError` for duplicate modifiers and unsupported combinations; schema refinements convert that error to a validation issue, which handlers report as `INVALID_INPUT`. Keep `keys.ts` independent of `contracts.ts` so schemas can reuse its validation without an import cycle.
 
 The schema accepts the named-key enum or `/^[\x20-\x7e]$/`, and reuses `encodeKey(key, modifiers, false)` in a refinement for static validity. Document supported modifier restrictions on the key action so discovery does not imply every combination is valid.
 
-- [ ] **Define strict action and tool schemas.** Use literal `type` values for each action, nested discriminated branches for mouse events, and mutually exclusive wait shapes. Publish all seven action types. Reject unknown fields, NaN/fractional/out-of-range values, invalid dimensions, `TERM` overrides, duplicate modifiers, empty batches, excess action count, and excess total payload.
+- [x] **Define strict action and tool schemas.** Use literal `type` values for each action, nested discriminated branches for mouse events, and mutually exclusive wait shapes. Publish all seven action types. Reject unknown fields, NaN/fractional/out-of-range values, invalid dimensions, `TERM` overrides, duplicate modifiers, empty batches, excess action count, and excess total payload.
 
 ```ts
 const modifiers = z.array(z.enum(MODIFIERS)).max(3).default([]);
@@ -324,13 +324,13 @@ const delayAction = z.strictObject({
 });
 ```
 
-Build the complete union from the spec's table. For the two `wait` shapes, use a union or refinement compatible with Zod's discriminated-union rules; do not register two identical discriminator values directly. Export unrefined object shapes where SDK registration needs them, and parse again through the full refined schema in handlers. Reuse observation validation on wait and tool arguments, including `settleTimeoutMs >= (settleMs ?? 250)`.
+Build the complete union from the spec's table. For the two `wait` shapes, use a union or refinement compatible with Zod's discriminated-union rules; do not register two identical discriminator values directly. Export complete strict schemas for SDK registration. Raw shape registration lets the SDK strip unknown fields before callbacks can reject them. Reuse observation validation on wait and tool arguments, including `settleTimeoutMs >= (settleMs ?? 250)`.
 
-- [ ] **Implement byte encoding for text, paste, focus, raw, and mouse.** Text is UTF-8; raw is `Buffer.from(bytes)`. Paste applies `text.replace(/\r?\n/g, "\r")`, then conditionally brackets it. Embedded control characters remain literal, matching the pinned xterm behavior. Disabled focus reporting yields an empty buffer. Mode validation happens against `InputModes` when the action executes.
+- [x] **Implement byte encoding for text, paste, focus, raw, and mouse.** Text is UTF-8; raw is `Buffer.from(bytes)`. Paste applies `text.replace(/\r?\n/g, "\r")`, then conditionally brackets it. Embedded control characters remain literal, matching the pinned xterm behavior. Disabled focus reporting yields an empty buffer. Mode validation happens against `InputModes` when the action executes.
 
 For mouse, use `modifierBits = Shift*4 + Alt*8 + Ctrl*16`; button codes are left=0, middle=1, right=2, wheel-up=64, wheel-down=65. SGR reports use `ESC [ < button ; column ; row M` for presses/wheel and lowercase `m` for release. Legacy uses `Buffer.from([27, 91, 77, button + 32, column + 32, row + 32])`; release uses button 3 plus modifier bits. X10 sends unmodified presses only. Reject legacy coordinates above 223, disabled tracking, pixel encoding, and X10 wheel reports or modified clicks.
 
-- [ ] **Verify discovery and byte-level edge cases.**
+- [x] **Verify discovery and byte-level edge cases.**
 
 ```ts
 const modes: InputModes = {
@@ -351,7 +351,7 @@ assert.deepEqual(encodeInput({ type: "raw", bytes: [0, 128, 255] }, modes), Buff
 
 Also assert CRLF normalization, focus-on/off bytes, X10 press-only output, scroll count, legacy coordinate 223 versus 224, reset-selected encoding, empty text, and static preflight rejection. Use `z.toJSONSchema(InputSchema)` to assert that named keys, modifiers, mouse variants, and all action tags survive JSON-schema conversion. Run `npm test`.
 
-- [ ] **Commit the input contract and encoders.**
+- [x] **Commit the input contract and encoders.**
 
 ```sh
 git add src/contracts.ts src/keys.ts src/input.ts test/input.test.ts
@@ -366,7 +366,7 @@ git commit -m "feat: define discoverable terminal input actions"
 
 **Produces:** `TerminalModel.observe`, with cancellation and parser-aware deadlines. The model returns `settled: false` at a deadline; session code adds tool-level strict failure context.
 
-- [ ] **Write failing timing tests using controlled time.** Seed/drain the terminal before enabling timer mocks. Mock `performance.now` alongside Node's `setTimeout` mock so the implementation can use a monotonic clock without depending on wall-clock time.
+- [x] **Write failing timing tests using controlled time.** Seed/drain the terminal before enabling timer mocks. Mock `performance.now` alongside Node's `setTimeout` mock so the implementation can use a monotonic clock without depending on wall-clock time.
 
 ```ts
 test("uses 250 ms of quiet by default", async (t) => {
@@ -393,7 +393,7 @@ test("uses 250 ms of quiet by default", async (t) => {
 
 Run `npm run build && node --test dist/test/observation.test.js`. Expected initial failure: observe is absent or returns before 250 ms.
 
-- [ ] **Implement one bounded observer per call.** Capture the start time, quiet interval, deadline, and received-output boundary. Subscribe to parsed changes and disposal; schedule the next quiet/deadline boundary. Any change to the visible fingerprint resets the quiet start. New output must finish parsing before reporting settlement. Evaluate `modes.synchronizedOutputMode` each time even when a mode change has no visible fingerprint change.
+- [x] **Implement one bounded observer per call.** Capture the start time, quiet interval, deadline, and received-output boundary. Subscribe to parsed changes and disposal; schedule the next quiet/deadline boundary. Any change to the visible fingerprint resets the quiet start. New output must finish parsing before reporting settlement. Evaluate `modes.synchronizedOutputMode` each time even when a mode change has no visible fingerprint change.
 
 ```ts
 const quietMs = options.settleMs ?? 250;
@@ -409,11 +409,11 @@ const deadline = startedAt + budgetMs;
 
 For `settleMs: 0`, do not wait for inactivity; flush the captured output boundary when possible. During synchronized output, return immediately with `settled: false` if no strict deadline was supplied. With an explicit strict deadline, continue waiting for parser drain and synchronized-output completion up to that deadline. The session converts an unsettled result to `SCREEN_NOT_SETTLED`. Remove timers/subscriptions on every exit path.
 
-- [ ] **Exercise exact observation boundaries.** Assert 1,000 ms best-effort timeout during 100 ms frame updates, an explicit 600 ms budget returning unsettled, and successful settlement 250 ms after the last frame. Repeated identical content does not reset the timer. Style-only changes and cursor movement do. `"\x1b[?2026h"` prevents settlement until `"\x1b[?2026l"`; a stuck redraw times out. Add output during a drain and prove a snapshot cannot falsely claim settlement with pending parser work.
+- [x] **Exercise exact observation boundaries.** Assert 1,000 ms best-effort timeout during 100 ms frame updates, an explicit 600 ms budget returning unsettled, and successful settlement 250 ms after the last frame. Repeated identical content does not reset the timer. Style-only changes and cursor movement do. `"\x1b[?2026h"` prevents settlement until `"\x1b[?2026l"`; a stuck redraw times out. Add output during a drain and prove a snapshot cannot falsely claim settlement with pending parser work.
 
 Use short controlled test sequences rather than long real sleeps. Cancellation must reject promptly and leave the model usable for another observation. Run `npm test`.
 
-- [ ] **Commit observation behavior.**
+- [x] **Commit observation behavior.**
 
 ```sh
 git add src/terminal.ts test/observation.test.ts
@@ -428,14 +428,14 @@ git commit -m "feat: observe terminal screens with bounded settling"
 
 **Produces:** `Session.start`, `info`, `snapshot`, and `close`, plus the connection between PTY output, emulator responses, and read backpressure. Batch input, resize, and registry behavior are added in Task 5.
 
-- [ ] **Write a controlled child and failing lifecycle tests.** The child runs in raw mode, reports dimensions/environment, supports terminal queries, and accepts simple test instructions. Keep instructions deterministic and flush one readiness line before the test proceeds.
+- [x] **Write a controlled child and failing lifecycle tests.** The child runs in raw mode, reports dimensions/environment, supports terminal queries, and accepts simple test instructions. Keep instructions deterministic and flush one readiness line before the test proceeds.
 
 ```ts
 // test/fixtures/terminal-child.ts
 process.stdin.setRawMode?.(true);
 process.stdin.resume();
 process.stdout.write(`READY ${process.stdout.columns}x${process.stdout.rows}\r\n`);
-process.on("SIGWINCH", () => {
+process.stdout.on("resize", () => {
   process.stdout.write(`SIZE ${process.stdout.columns}x${process.stdout.rows}\r\n`);
 });
 process.stdin.on("data", (bytes: Buffer) => {
@@ -453,7 +453,7 @@ Extend the fixture with explicit command-line modes for final-output-then-exit, 
 
 Run `npm run build && node --test dist/test/session.test.js`. Expected initial failure: Session is missing.
 
-- [ ] **Implement start and connect both directions.**
+- [x] **Implement start and connect both directions.**
 
 ```ts
 const env = { ...process.env };
@@ -475,17 +475,17 @@ const child = pty.spawn(options.shell ?? process.env.SHELL ?? "/bin/sh", args, {
 
 Define a boolean `login` option defaulting to true, with an input type that permits omission. Normalize an empty `SHELL` to `/bin/sh`. Use isolated child homes to verify login profiles and opt-out on available Bash/Dash/Zsh binaries, preserving noninteractive command mode. Ordinary process fixtures explicitly opt out of login startup so tests do not depend on user profiles. Validate all configuration before spawning. Dispose a partially constructed model if spawning fails. Route `child.onData` to `model.write` and `model.onResponse` to `child.write`. Subscribe to pending-byte counts: pause once at or above 1 MiB, resume once at or below 256 KiB. Native flow-control input interception remains disabled, so Ctrl+S/Ctrl+Q retain terminal behavior.
 
-- [ ] **Implement status, snapshot, and errors.** Preserve the screen when `onExit` fires and retain exit metadata. Snapshot composes session metadata with the observed screen. When an explicit strict deadline returns unsettled, throw `ToolError("SCREEN_NOT_SETTLED", ...)` with the session ID and latest snapshot. Nonzero exit codes are data; unknown shell/executable setup failures become `SPAWN_FAILED` or an observed command exit, according to what actually occurred.
+- [x] **Implement status, snapshot, and errors.** Preserve the screen when `onExit` fires and retain exit metadata. Snapshot composes session metadata with the observed screen. When an explicit strict deadline returns unsettled, throw `ToolError("SCREEN_NOT_SETTLED", ...)` with the session ID and latest snapshot. Nonzero exit codes are data; unknown shell/executable setup failures become `SPAWN_FAILED` or an observed command exit, according to what actually occurred.
 
-- [ ] **Implement idempotent cleanup with bounded escalation.** Abort session observers first. Signal the process group with SIGHUP, allow 500 ms for exit, then signal it with SIGKILL if it still exists; ignore only ESRCH and surface other cleanup failures appropriately. Use process-group signaling rather than assuming `child.kill()` reaches descendants. Drain already-received output before disposing where the close budget allows. Unsubscribe handlers and release timers even when signaling fails.
+- [x] **Implement idempotent cleanup with bounded escalation.** Abort session observers first. Signal the process group with SIGHUP, allow 500 ms for exit, then signal it with SIGKILL if it still exists; ignore only ESRCH and surface other cleanup failures appropriately. Use process-group signaling rather than assuming `child.kill()` reaches descendants. Drain already-received output before disposing where the close budget allows. Unsubscribe handlers and release timers even when signaling fails.
 
 Keep request cancellation separate from session cancellation. A canceled snapshot must leave the child running. Ordinary process exit retains the model; explicit close disposes it.
 
-- [ ] **Verify process behavior and resource ownership.** Assert the requested 73×19 size, environment override/deletion, enforced TERM, working directory, terminal-query response path, final output with exit code 7, and retained snapshots. Verify backpressure preserves a finite marker emitted after a large output burst. Start a same-group descendant, close its session, and confirm both PIDs disappear; exercise escalation with a child that ignores SIGHUP. Ensure `t.after` closes every created session even if an assertion fails.
+- [x] **Verify process behavior and resource ownership.** Assert the requested 73×19 size, environment override/deletion, enforced TERM, working directory, terminal-query response path, final output with exit code 7, and retained snapshots. Verify backpressure preserves a finite marker emitted after a large output burst. Start a same-group descendant, close its session, and confirm both PIDs disappear; exercise escalation with a child that ignores SIGHUP. Ensure `t.after` closes every created session even if an assertion fails.
 
 Use bounded readiness polling with diagnostic snapshots on timeout; do not rely on a fixed startup sleep. Run `npm test`.
 
-- [ ] **Commit process ownership.**
+- [x] **Commit process ownership.**
 
 ```sh
 git add src/session.ts test/session.test.ts test/fixtures/terminal-child.ts
@@ -500,7 +500,7 @@ git commit -m "feat: manage pseudoterminal session lifecycles"
 
 **Produces:** `Session.input`, `Session.resize`, and all `SessionRegistry` methods.
 
-- [ ] **Write a failing partial-progress test.** Use a child mode that repeatedly changes visible text every 25 ms after receiving a command. A strict final observation must fail after input has been submitted.
+- [x] **Write a failing partial-progress test.** Use a child mode that repeatedly changes visible text every 25 ms after receiving a command. A strict final observation must fail after input has been submitted.
 
 ```ts
 await assert.rejects(
@@ -521,7 +521,7 @@ await assert.rejects(
 
 Run `npm run build && node --test dist/test/session.test.js`. Expected initial failure: batch execution is absent.
 
-- [ ] **Implement static preflight and ordered execution.** Parse the entire batch and run static key validation before entering the mutation queue. A session has one promise-based mutation queue for batches and resizes; rejected jobs must not poison later jobs. Each queued operation checks session closure and request cancellation before acting.
+- [x] **Implement static preflight and ordered execution.** Parse the entire batch and run static key validation before entering the mutation queue. A session has one promise-based mutation queue for batches and resizes; rejected jobs must not poison later jobs. Each queued operation checks session closure and request cancellation before acting.
 
 For each non-wait action, drain received output, read current input modes, encode, and submit a nonempty buffer. Increment `actionsCompleted` after completion and set `inputSent` upon submission. For fixed waits use an abortable timer; for settling waits call the session's observation helper without reacquiring the mutation queue. Final observation uses the outer timing options and retains progress if it fails.
 
@@ -537,15 +537,15 @@ for (const [index, action] of actions.entries()) {
 
 Do not hold observations behind the mutation queue: an agent must be able to inspect a session while another call is waiting. Close aborts active waits and queued jobs. Validation errors submit no bytes; a later state-dependent mouse failure preserves prior progress. An action's successful submission does not imply the child has consumed it.
 
-- [ ] **Implement resize and registry behavior.** Resize the model and PTY within the same mutation queue, handling a process exit between validation and resize. Notify observers of changed dimensions. Attach the resulting dimensions and latest snapshot to a strict post-resize timeout.
+- [x] **Implement resize and registry behavior.** Resize the model and PTY within the same mutation queue, handling a process exit between validation and resize. Notify observers of changed dimensions. Attach the resulting dimensions and latest snapshot to a strict post-resize timeout.
 
 The registry allocates UUIDs, limits retained sessions to eight, lists concise status, rejects missing IDs, and removes sessions only through close. `close` returns false for unknown IDs. `closeAll` attempts every session even if one cleanup fails, then reports failures.
 
-- [ ] **Verify concurrency and discovery-relevant progress.** Assert an invalid later key prevents earlier text from being sent; two concurrent batches do not interleave; a mode-changing child affects a subsequent action after an explicit wait; snapshots run during waits; cancellation preserves already-sent input and leaves the session usable; close promptly aborts waits; resize produces `SIZE 91x27`; and nine retained sessions exceed the registry limit. Verify list includes exited sessions until they are closed.
+- [x] **Verify concurrency and discovery-relevant progress.** Assert an invalid later key prevents earlier text from being sent; two concurrent batches do not interleave; a mode-changing child affects a subsequent action after an explicit wait; snapshots run during waits; cancellation preserves already-sent input and leaves the session usable; close promptly aborts waits; resize produces `SIZE 91x27`; and nine retained sessions exceed the registry limit. Verify list includes exited sessions until they are closed.
 
 Add a mouse case where one earlier text action succeeds and the later click fails because reporting is disabled; assert `actionsCompleted: 1` and `failedActionIndex: 1`. Run `npm test`.
 
-- [ ] **Commit ordered session operations.**
+- [x] **Commit ordered session operations.**
 
 ```sh
 git add src/session.ts test/session.test.ts test/fixtures/terminal-child.ts
@@ -560,7 +560,7 @@ git commit -m "feat: execute ordered terminal actions across sessions"
 
 **Produces:** A runnable `terminal-emulator-mcp` executable, complete MCP discovery, cross-platform checks, and usage documentation.
 
-- [ ] **Write a failing client-driven discovery test.** Use the SDK's client and stdio transport against the built executable. Inspect actual `tools/list` output rather than only Zod's local conversion.
+- [x] **Write a failing client-driven discovery test.** Use the SDK's client and stdio transport against the built executable. Inspect actual `tools/list` output rather than only Zod's local conversion.
 
 ```ts
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -589,13 +589,13 @@ await client.close();
 
 Register cleanup with `t.after` in the actual test so failures do not leave a server process running. Run `npm run build && node --test dist/test/server.test.js`. Expected initial failure: the CLI entry point or registered tools are missing.
 
-- [ ] **Register the six tools with complete schemas and descriptions.**
+- [x] **Register the six tools with complete schemas and descriptions.**
 
 ```ts
 server.registerTool("terminal_input", {
   description: "Send an ordered batch of terminal actions and return its styled screen. "
     + "A settling error does not undo input; inspect inputSent and actionsCompleted before retrying.",
-  inputSchema: InputSchema.shape,
+  inputSchema: InputSchema,
 }, async (rawArgs, extra) => {
   const args = InputSchema.parse(rawArgs);
   const result = await registry.get(args.sessionId).input(args.actions, args, extra.signal);
@@ -603,15 +603,17 @@ server.registerTool("terminal_input", {
 });
 ```
 
-If Zod refinements require a separate base object, register the exported base shape and parse through the full refined schema in this callback; keep both derived from the same definitions. Define `formatResult` locally in `server.ts` to return both `structuredContent` and readable text content; define one error wrapper that preserves `ToolError.details` and sets `isError: true`. Avoid a generic tool framework.
+Register the full strict schema objects, including refinements, using the pinned SDK's schema-object support. Verify that actual discovery advertises `additionalProperties:false` and that unknown top-level arguments cannot be discarded before mutation. Define `formatResult` locally in `server.ts` to return both `structuredContent` and readable text content; define one error wrapper that preserves `ToolError.details` and sets `isError: true`. Missing-session input errors retain zero progress. Avoid a generic tool framework.
+
+Readable style spans use compact row groups such as `12: 1-16=s3`; structured content retains the complete span objects. Measure the complete encoded tool result against an 8 MiB budget. Oversized results return `RESULT_TOO_LARGE` with bounded session/effect metadata and original error context, without silently truncating style data or closing the connection. Exercise both a full alternating-color 500×200 screen that fits and a many-style result that fails explicitly, then verify recovery by resizing.
 
 Start allocates the session before observing, preserving its ID on strict timeout. List returns concise metadata. Snapshot passes optional history. Resize carries applied dimensions in its snapshot. Close returns `{ sessionId, closed }`. Tool annotations must accurately describe mutating versus observing behavior.
 
-- [ ] **Implement the executable and shutdown.** Read package identity/version from `package.json` through one small shared metadata module. Handle `--help`/`-h`, `--version`/`-v`, and invalid arguments before dynamically loading server/native dependencies; test these paths from an isolated package without dependencies. Add SemVer 7.8.5 as a production dependency and its 7.8.0 type definitions as a development dependency. Validate the running Node version against the package manifest's engine range before loading MCP/native dependencies, while keeping help/version independent of dependencies. Add `#!/usr/bin/env node` at the top of `src/index.ts`, connect `StdioServerTransport`, and route diagnostics to stderr. A single idempotent shutdown promise closes the registry and transport on disconnect or termination signals. Do not call immediate `process.exit` before cleanup completes. Never write child output directly to server stdout.
+- [x] **Implement the executable and shutdown.** Read package identity/version from `package.json` through one small shared metadata module. Handle `--help`/`-h`, `--version`/`-v`, and invalid arguments before dynamically loading server/native dependencies; test these paths from an isolated package without dependencies. Add SemVer 7.8.5 as a production dependency and its 7.8.0 type definitions as a development dependency. Validate the running Node version against the package manifest's engine range before loading MCP/native dependencies, while keeping help/version independent of dependencies. Add `#!/usr/bin/env node` at the top of `src/index.ts`, mark the compiled entry point executable in the build command, connect `StdioServerTransport`, and route diagnostics to stderr. A single idempotent shutdown promise stops protocol admission before awaiting every registry cleanup on stdin EOF, stdout stream failure, SIGHUP, SIGINT, or SIGTERM. Consume writable stream errors so EPIPE cannot terminate the process before cleanup. Do not call immediate `process.exit` before cleanup completes. Never write child output directly to server stdout.
 
-- [ ] **Exercise the full MCP workflow.** Start a 73×19 fixture session through `client.callTool`, extract its session ID from structured content, submit a batch, inspect the styled screen, resize, list, close, and verify the session is gone. Trigger a strict animated timeout and assert MCP `isError`, progress fields, and latest snapshot. Disconnect the client with a live child and verify cleanup. Assert malformed actions are rejected and stderr diagnostics never corrupt protocol messages.
+- [x] **Exercise the full MCP workflow.** Start a 73×19 fixture session through `client.callTool`, extract its session ID from structured content, submit a batch, inspect the styled screen, resize, list, close, and verify the session is gone. Trigger a strict animated timeout and assert MCP `isError`, progress fields, and latest snapshot. Close each side of the client connection with a live resistant child and verify cleanup. Assert malformed actions and unknown top-level fields are rejected before effects, missing-session input has zero progress, and stderr diagnostics never corrupt protocol messages.
 
-- [ ] **Write usage documentation and a platform matrix.** README leads with consumer installation and copyable `claude mcp add` / `codex mcp add` commands; it includes native installation prerequisites, developer build commands, a `claude` example at 120×40, the full action vocabulary, key/modifier restrictions, snapshot/style examples, 250 ms quiet/1,000 ms cap behavior, strict timeout recovery, session cleanup boundaries, and mouse limits.
+- [x] **Write usage documentation and a platform matrix.** README leads with consumer installation and copyable `claude mcp add` / `codex mcp add` commands; it includes native installation prerequisites, developer build commands, a `claude` example at 120×40, the full action vocabulary, key/modifier restrictions, snapshot/style examples, 250 ms quiet/1,000 ms cap behavior, strict timeout recovery, session cleanup boundaries, and mouse limits.
 
 ```sh
 npm install --global --allow-scripts=node-pty terminal-emulator-mcp@0.9.0
@@ -619,9 +621,9 @@ claude mcp add --scope user --transport stdio terminal-emulator-mcp -- terminal-
 codex mcp add terminal-emulator-mcp -- terminal-emulator-mcp
 ```
 
-CI runs `npm ci`, `npm run typecheck`, `npm test`, and `npm pack --dry-run` on `ubuntu-latest` and `macos-latest`, with Node 24.16.0 and 26. Use current maintained checkout/setup-node actions verified at implementation time; do not invent action versions.
+CI runs `npm ci`, `npm run typecheck`, `npm test`, and `npm pack --dry-run` on `ubuntu-latest` and `macos-latest`, with Node 24.16.0 and 26. Approve only the pinned `node-pty` dependency's install scripts in the project's `allowScripts` field so Linux can compile its native addon. Use the pinned dependency's correctly packaged native helpers without permission repairs. Verify fresh installations using its macOS and compatible Linux prebuilds, and document explicit source builds for environments without compatible binaries. Keep dependency permission repair out of runtime application code. Use current maintained checkout/setup-node actions verified at implementation time; do not invent action versions.
 
-- [ ] **Verify the deliverable and commit.** Run the commands below and inspect every result. Inspect the package file list to ensure the executable and all runtime imports are included, with no tests or source-tree requirement. In a temporary directory, extract the packed artifact and run its executable with the SDK client; install production dependencies there if necessary.
+- [x] **Verify the deliverable and commit.** Run the commands below and inspect every result. Inspect the package file list to ensure the executable and all runtime imports are included, with no tests or source-tree requirement. In a temporary directory, extract the packed artifact and run its executable with the SDK client; install production dependencies there if necessary.
 
 ```sh
 npm run typecheck
@@ -630,7 +632,7 @@ npm pack --dry-run
 git diff --check
 ```
 
-- [ ] **Install and verify both local harnesses.** Register the built executable as the `terminal-emulator-mcp` MCP server in the installed Codex and Claude harnesses, using their supported configuration commands and preserving unrelated configuration. Verify current CLI syntax and official documentation before modifying configuration. Both binaries and `htop` are available on this machine.
+- [x] **Install and verify both local harnesses.** Register the built executable as the `terminal-emulator-mcp` MCP server in the installed Codex and Claude harnesses, using their supported configuration commands and preserving unrelated configuration. Verify current CLI syntax and official documentation before modifying configuration. Both binaries and `htop` are available on this machine.
 
 Through each harness, ask the agent to use only the `terminal-emulator-mcp` tools to start `htop` at 120×40, inspect the screen, open its setup menu with F2, observe a menu change after keyboard navigation, return to the process view, and quit. Require actual MCP tool-call evidence and screen observations, not a natural-language claim that the tool worked. Prefer exercising the interactive harnesses; if a harness can only be verified through its noninteractive entry point, record that limitation explicitly. Preserve concise evidence of the method and results without checking private harness transcripts or machine process listings into Git. Do not make automated tests depend on either harness, external credentials, or `htop`.
 

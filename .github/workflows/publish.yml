@@ -1,0 +1,272 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate without publishing to npm or creating a GitHub Release
+        type: boolean
+        default: true
+      ref:
+        description: Ref to validate; real publication also requires running this workflow from its release tag
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+env:
+  NPM_VERSION: 11.19.1
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      candidate: ${{ steps.metadata.outputs.candidate }}
+      publish: ${{ steps.metadata.outputs.publish }}
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      dist_tag: ${{ steps.metadata.outputs.dist_tag }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      filename: ${{ steps.pack.outputs.filename }}
+      integrity: ${{ steps.pack.outputs.integrity }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm install --global "npm@$NPM_VERSION"
+      - name: Validate release identity
+        id: metadata
+        env:
+          SELECTED_REF: ${{ inputs.ref || github.ref }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          NPM_PUBLISH_ENABLED: ${{ vars.NPM_PUBLISH_ENABLED }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { execFileSync } from "node:child_process";
+          import { appendFileSync, readFileSync } from "node:fs";
+          const { name, version } = JSON.parse(readFileSync("package.json", "utf8"));
+          assert.equal(name, "terminal-emulator-mcp");
+          // npm strips build metadata; release tags and registry versions must retain the same identity.
+          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/,
+            "Release versions must use MAJOR.MINOR.PATCH[-PRERELEASE] without build metadata (+...)");
+          const tag = `v${version}`;
+          const commit = execFileSync("git", ["rev-parse", "HEAD^{commit}"], { encoding: "utf8" }).trim();
+          const candidate = process.env.EVENT_NAME === "push" || process.env.DRY_RUN === "false";
+          if (candidate) {
+            assert.equal(process.env.EVENT_REF, `refs/tags/${tag}`, "Publish must run from the matching release tag");
+            assert.ok([tag, `refs/tags/${tag}`].includes(process.env.SELECTED_REF), "Selected ref must be the release tag");
+            const eventCommit = execFileSync("git", ["rev-parse", `${process.env.GITHUB_SHA}^{commit}`],
+              { encoding: "utf8" }).trim();
+            assert.equal(commit, eventCommit, "Checked-out commit must match the immutable workflow event commit");
+            const tagged = execFileSync("git", ["rev-parse", `refs/tags/${tag}^{commit}`], { encoding: "utf8" }).trim();
+            assert.equal(commit, tagged, "Checked-out commit must match the release tag");
+          }
+          const publish = candidate && process.env.NPM_PUBLISH_ENABLED === "true";
+          // Pre-1.0 and SemVer prereleases are previews; stable 1.0+ versions advance latest.
+          const distTag = version.startsWith("0.") || version.includes("-") ? "preview" : "latest";
+          appendFileSync(process.env.GITHUB_OUTPUT,
+            `candidate=${candidate}\npublish=${publish}\nversion=${version}\ntag=${tag}\n`
+            + `dist_tag=${distTag}\ncommit=${commit}\n`);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            `Version: ${version}\n\nCommit: ${commit}\n\nnpm tag: ${distTag}\n\n`
+            + `Release candidate: ${candidate}\n\nPublish enabled: ${publish}\n`);
+          NODE
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Pack the built release once
+        id: pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/pack.json"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          const [packed] = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/pack.json`, "utf8"));
+          appendFileSync(process.env.GITHUB_OUTPUT, `filename=${packed.filename}\nintegrity=${packed.integrity}\n`);
+          NODE
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/release/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  test-package:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ["24.16.0", 26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install --global "npm@$NPM_VERSION"
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/release
+      - run: npm run test:package -- "$RUNNER_TEMP/release/$PACKAGE_FILENAME"
+        env:
+          PACKAGE_FILENAME: ${{ needs.prepare.outputs.filename }}
+
+  publish:
+    needs: [prepare, test-package]
+    if: needs.prepare.outputs.publish == 'true' && vars.NPM_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_PUBLISH_ENABLED: ${{ vars.NPM_PUBLISH_ENABLED }}
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      PACKAGE_FILENAME: ${{ needs.prepare.outputs.filename }}
+      PACKAGE_INTEGRITY: ${{ needs.prepare.outputs.integrity }}
+      DIST_TAG: ${{ needs.prepare.outputs.dist_tag }}
+    steps:
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+      - run: npm install --global "npm@$NPM_VERSION"
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/release
+      - name: Verify artifact and publish with npm OIDC
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { spawnSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          import { setTimeout as delay } from "node:timers/promises";
+          assert.equal(process.env.NPM_PUBLISH_ENABLED, "true", "NPM_PUBLISH_ENABLED must equal true to publish");
+          const { RUNNER_TEMP, PACKAGE_FILENAME, PACKAGE_VERSION, PACKAGE_INTEGRITY, DIST_TAG } = process.env;
+          const tarball = `${RUNNER_TEMP}/release/${PACKAGE_FILENAME}`;
+          const integrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
+          assert.equal(integrity, PACKAGE_INTEGRITY, "Artifact must exactly match the tested package");
+          function registryValue(packageSpec, field) {
+            const result = spawnSync("npm", ["view", packageSpec, field,
+              "--json", "--registry=https://registry.npmjs.org"], { encoding: "utf8" });
+            assert.ifError(result.error);
+            const response = JSON.parse(result.stdout || "{}");
+            if (result.status === 0) return response;
+            assert.equal(response.error?.code, "E404", `Registry lookup failed: ${result.stderr}`);
+            return null;
+          }
+          const registryIntegrity = () => registryValue(`terminal-emulator-mcp@${PACKAGE_VERSION}`, "dist.integrity");
+          const registryTag = () => registryValue("terminal-emulator-mcp", "dist-tags")?.[DIST_TAG] ?? null;
+          const existing = registryIntegrity();
+          let published = existing;
+          let tagTarget;
+          if (existing !== null) {
+            assert.equal(existing, integrity, "Published version has different bytes; npm versions are immutable");
+            tagTarget = registryTag();
+          } else {
+            const result = spawnSync("npm", ["publish", tarball, "--ignore-scripts", "--access=public",
+              `--tag=${DIST_TAG}`, "--provenance", "--registry=https://registry.npmjs.org"], { stdio: "inherit" });
+            assert.ifError(result.error);
+            assert.equal(result.status, 0, "npm publication failed");
+            for (let attempt = 0; attempt < 6; attempt++) {
+              published = registryIntegrity();
+              tagTarget = registryTag();
+              if (published === integrity && tagTarget === PACKAGE_VERSION) break;
+              if (published !== null) assert.equal(published, integrity, "Registry returned different package bytes");
+              if (attempt < 5) await delay(10_000);
+            }
+          }
+          assert.equal(published, integrity, "Registry must confirm the exact tested artifact before release creation");
+          assert.equal(tagTarget, PACKAGE_VERSION,
+            `npm ${DIST_TAG} points to ${tagTarget ?? "(missing)"}, expected ${PACKAGE_VERSION}. `
+            + "No distribution tag was repaired. Confirm the intended release and repair the tag explicitly if needed; "
+            + "retrying an older release must not move a newer tag backward.");
+          console.log(`Verified published package and ${DIST_TAG} distribution tag; continuing the release.`);
+          NODE
+
+  github-release:
+    needs: [prepare, test-package, publish]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' && needs.test-package.result == 'success'
+        && needs.prepare.outputs.candidate == 'true'
+        && (needs.publish.result == 'success'
+          || (needs.prepare.outputs.publish == 'false' && needs.publish.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Reconcile the tested GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+          PUBLISH_REQUESTED: ${{ needs.prepare.outputs.publish }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          DIST_TAG: ${{ needs.prepare.outputs.dist_tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { spawnSync } from "node:child_process";
+          import { writeFileSync } from "node:fs";
+          const { GH_REPO, RELEASE_TAG, DIST_TAG, PUBLISH_RESULT, PUBLISH_REQUESTED, RUNNER_TEMP } = process.env;
+          assert.equal(process.env.RELEASE_CANDIDATE, "true", "Only validated tags can create GitHub Releases");
+          const draft = PUBLISH_RESULT !== "success";
+          assert.equal(PUBLISH_RESULT, draft ? "skipped" : "success", "npm verification must succeed or be disabled");
+          assert.equal(PUBLISH_REQUESTED, String(!draft), "Publication must be verified before finalizing a draft");
+          // Authenticated listings include drafts; the published-tag endpoint cannot find their pending tags.
+          const lookup = spawnSync("gh", ["api", "--paginate", "--slurp", "--method", "GET",
+            `repos/${GH_REPO}/releases?per_page=100`], { encoding: "utf8" });
+          assert.ifError(lookup.error);
+          assert.equal(lookup.status, 0, `GitHub Release lookup failed: ${lookup.stderr}`);
+          const release = JSON.parse(lookup.stdout).flat().find((entry) => entry.tag_name === RELEASE_TAG);
+          if (release && !release.draft) {
+            console.log("GitHub Release is already public; leaving it unchanged.");
+            process.exit(0);
+          }
+          const notice = "<!-- npm-release-candidate -->\n"
+            + "npm publication has not occurred for this release candidate.\n<!-- /npm-release-candidate -->";
+          const notes = (release?.body ?? "")
+            .replace(/<!-- npm-release-candidate -->[\s\S]*?<!-- \/npm-release-candidate -->\s*/g, "").trim();
+          const notesFile = `${RUNNER_TEMP}/release-notes.md`;
+          writeFileSync(notesFile, draft ? `${notice}\n\n${notes}`.trim() : notes);
+          const args = ["release", release ? "edit" : "create", RELEASE_TAG,
+            "--title", draft ? `${RELEASE_TAG} — npm not published` : RELEASE_TAG,
+            "--notes-file", notesFile, `--prerelease=${DIST_TAG === "preview"}`,
+            `--latest=${!draft && DIST_TAG === "latest"}`];
+          // Omitting --draft on edits cannot demote a release published concurrently by a maintainer.
+          if (!release || !draft) args.push(`--draft=${draft}`);
+          if (!release) args.push("--verify-tag", "--generate-notes");
+          const result = spawnSync("gh", args, { stdio: "inherit" });
+          assert.ifError(result.error);
+          assert.equal(result.status, 0, "GitHub Release update failed");
+          NODE
