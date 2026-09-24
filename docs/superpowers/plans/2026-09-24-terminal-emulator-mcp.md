@@ -25,7 +25,7 @@
 - Source line-length target: 120 characters; Markdown prose is not hard-wrapped.
 - Tests use Node's built-in test runner; additional test frameworks and application frameworks are unnecessary.
 
-Additional exact limits from the spec: eight open sessions, 500 columns, 200 rows, 2,000 scrollback lines, 256 actions per batch, 1 MiB of encoded text/raw input per batch, and 100 wheel steps per action. Pause PTY reads at 1 MiB of pending output and resume at 256 KiB. Timing options accept integer milliseconds; quiet intervals and explicit delays are at most 60,000 ms, and strict deadlines are between 1 and 60,000 ms.
+Additional exact limits from the spec: eight open sessions, 2–500 columns, 1–200 rows, 2,000 scrollback lines, 256 actions per batch, 1 MiB of encoded text/raw input per batch, and 100 wheel steps per action. Pause PTY reads at 1 MiB of pending output and resume at 256 KiB. Timing options accept integer milliseconds; quiet intervals and explicit delays are at most 60,000 ms, and strict deadlines are between 1 and 60,000 ms.
 
 ## Files and responsibilities
 

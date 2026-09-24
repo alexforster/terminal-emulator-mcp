@@ -41,7 +41,7 @@ The package is Apache-2.0 licensed and declares macOS/Linux support. Package ide
 
 The initial working directory defaults to the server's working directory. The child inherits the server's environment, then receives requested overrides. An override value of `null` deletes a variable. `TERM=xterm-256color` is set by the server to match its emulator and cannot be overridden through `env`. Login startup files can subsequently change environment variables or the working directory. The server does not inject terminal-brand, color-depth, or pixel-size claims.
 
-The child and emulator receive identical dimensions. Supported dimensions are 1–500 columns and 1–200 rows. Normal-buffer scrollback is limited to 2,000 lines. `terminal_resize` updates both components and lets the operating system notify the child of its new terminal size.
+The child and emulator receive identical dimensions. Supported dimensions are 2–500 columns and 1–200 rows, matching xterm's minimum width of two columns. Normal-buffer scrollback is limited to 2,000 lines. `terminal_resize` updates both components and lets the operating system notify the child of its new terminal size.
 
 Exited sessions remain inspectable, with the last parsed screen, exit code, and signal where available. A command that exits unsuccessfully still yields a successful observation containing its exit status. Failure to create a process is a tool error. No input is accepted after exit.
 
