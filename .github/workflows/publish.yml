@@ -192,12 +192,14 @@ jobs:
               `--tag=${DIST_TAG}`, "--provenance", "--registry=https://registry.npmjs.org"], { stdio: "inherit" });
             assert.ifError(result.error);
             assert.equal(result.status, 0, "npm publication failed");
-            for (let attempt = 0; attempt < 6; attempt++) {
+            // Accepted packages can take several minutes to become visible in registry reads.
+            const attempts = 31;
+            for (let attempt = 0; attempt < attempts; attempt++) {
               published = registryIntegrity();
               tagTarget = registryTag();
               if (published === integrity && tagTarget === PACKAGE_VERSION) break;
               if (published !== null) assert.equal(published, integrity, "Registry returned different package bytes");
-              if (attempt < 5) await delay(10_000);
+              if (attempt < attempts - 1) await delay(10_000);
             }
           }
           assert.equal(published, integrity, "Registry must confirm the exact tested artifact before release creation");

@@ -232,7 +232,55 @@ if (process.argv[2] === "publish") {
     if (!scenario.existing) assert.equal(publishCalls[0][1], join(directory, "release", "package.tgz"));
     assert.ok(calls.every((args) => args[0] === "view" || args[0] === "publish"), "Tags must never be repaired");
     const tagQueries = Number(readFileSync(join(directory, "tag-queries"), "utf8"));
-    assert.equal(tagQueries, scenario.existing || scenario.target === version ? 1 : scenario.confirmAfter ?? 6);
+    assert.equal(tagQueries, scenario.existing || scenario.target === version ? 1 : scenario.confirmAfter ?? 31);
+  });
+}
+
+for (const scenario of [
+  { name: "visibility after more than one minute", visibleAfter: 8, mismatch: false, expectedQueries: 8, success: true },
+  { name: "visibility beyond the five-minute budget", visibleAfter: 32, mismatch: false, expectedQueries: 31, success: false },
+  { name: "mismatched bytes immediately visible", visibleAfter: 1, mismatch: true, expectedQueries: 1, success: false },
+]) {
+  test(`registry publication propagation: ${scenario.name}`, (t) => {
+    const { directory, command, run } = fixture(t);
+    mkdirSync(join(directory, "release"));
+    const bytes = Buffer.from("exact tested tarball");
+    writeFileSync(join(directory, "release", "package.tgz"), bytes);
+    command("npm", `
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
+appendFileSync("calls", JSON.stringify(process.argv.slice(2)) + "\\n");
+if (process.argv[2] === "publish") {
+  writeFileSync("queries", "0");
+} else if (process.argv[2] === "view" && process.argv[4] === "dist.integrity") {
+  const queries = existsSync("queries") ? Number(readFileSync("queries", "utf8")) + 1 : 0;
+  if (queries) writeFileSync("queries", String(queries));
+  if (queries < Number(process.env.VISIBLE_AFTER)) {
+    console.log(JSON.stringify({ error: { code: "E404" } }));
+    process.exitCode = 1;
+  } else {
+    console.log(JSON.stringify(process.env.MISMATCH === "true" ? "sha512-wrong" : process.env.PACKAGE_INTEGRITY));
+  }
+} else if (process.argv[2] === "view" && process.argv[4] === "dist-tags") {
+  console.log(JSON.stringify({ preview: "0.9.1" }));
+} else {
+  throw new Error("Unexpected npm command: " + process.argv.slice(2).join(" "));
+}
+`);
+    const result = run(immediatePublication, {
+      NPM_PUBLISH_ENABLED: "true", PACKAGE_FILENAME: "package.tgz", PACKAGE_VERSION: "0.9.1", DIST_TAG: "preview",
+      PACKAGE_INTEGRITY: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+      VISIBLE_AFTER: String(scenario.visibleAfter), MISMATCH: String(scenario.mismatch),
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status === 0, scenario.success, result.stderr);
+    if (!scenario.success) {
+      assert.match(result.stderr, scenario.mismatch ? /different package bytes/ : /Registry must confirm/);
+    }
+    assert.equal(Number(readFileSync(join(directory, "queries"), "utf8")), scenario.expectedQueries);
+    const calls: string[][] = readFileSync(join(directory, "calls"), "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(calls.filter((args) => args[0] === "publish").length, 1, "Polling must never republish");
+    assert.ok(calls.every((args) => args[0] === "view" || args[0] === "publish"), "Tags must never be repaired");
   });
 }
 
