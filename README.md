@@ -7,7 +7,7 @@ A headless, interactive terminal MCP server for shells, REPLs, and TUIs. Agents 
 Requires Node.js 22 or newer on macOS or Linux. Install a released version from npm:
 
 ```sh
-npm install --global --allow-scripts=node-pty terminal-emulator-mcp@0.9.0
+npm install --global --allow-scripts=node-pty terminal-emulator-mcp@0.9.1
 terminal-emulator-mcp --version
 ```
 
@@ -37,10 +37,10 @@ For an npx-based setup, use these add commands instead of the global-install con
 
 ```sh
 claude mcp add --scope user --transport stdio terminal-emulator-mcp -- \
-  npx --yes --allow-scripts=node-pty terminal-emulator-mcp@0.9.0
+  npx --yes --allow-scripts=node-pty terminal-emulator-mcp@0.9.1
 
 codex mcp add terminal-emulator-mcp -- \
-  npx --yes --allow-scripts=node-pty terminal-emulator-mcp@0.9.0
+  npx --yes --allow-scripts=node-pty terminal-emulator-mcp@0.9.1
 ```
 
 The version pin makes startup reproducible. A first npx run may need to download packages or compile native code; a global installation completes that work before the harness starts its MCP connection.
@@ -51,7 +51,7 @@ The pinned `node-pty` dependency ships prebuilt binaries for macOS x64/ARM64 and
 
 ```sh
 npm_config_build_from_source=true npm install --global --allow-scripts=node-pty \
-  terminal-emulator-mcp@0.9.0
+  terminal-emulator-mcp@0.9.1
 ```
 
 The server uses stdin/stdout for MCP messages and stderr for diagnostics. With no arguments it starts the stdio server; `--help` and `--version` print their output and exit. Commands run with the server's local permissions and inherited environment.
