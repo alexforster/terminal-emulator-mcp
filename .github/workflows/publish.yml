@@ -101,7 +101,7 @@ jobs:
           const [packed] = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/pack.json`, "utf8"));
           appendFileSync(process.env.GITHUB_OUTPUT, `filename=${packed.filename}\nintegrity=${packed.integrity}\n`);
           NODE
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: npm-package
           path: ${{ runner.temp }}/release/*.tgz
