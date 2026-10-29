@@ -52,7 +52,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "@xterm/headless": "6.0.0",
-    "node-pty": "1.2.0-beta.15",
+    "node-pty": "1.2.0-beta.18",
     "semver": "7.8.5",
     "zod": "4.6.7"
   },
